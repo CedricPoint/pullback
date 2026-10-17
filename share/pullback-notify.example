@@ -1,0 +1,19 @@
+#!/bin/sh
+# Example NOTIFY_COMMAND. Called as: pullback-notify <level> <message>
+#
+# Put your webhook in a file only root can read, rather than in here.
+set -eu
+
+level="$1"
+message="$2"
+webhook=$(cat /etc/pullback/discord-webhook 2>/dev/null) || exit 0
+
+case "$level" in
+  error)     text="🔴 **pullback** $message" ;;
+  recovered) text="🟢 **pullback** $message" ;;
+  *)         text="**pullback** $message" ;;
+esac
+
+# shellcheck disable=SC2016
+printf '{"content": %s}' "$(printf '%s' "$text" | sed 's/\/\\/g; s/"/\\"/g; s/^/"/; s/$/"/')" \
+  | curl -sS -m 10 -H 'Content-Type: application/json' -d @- "$webhook" >/dev/null

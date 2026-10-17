@@ -1,0 +1,54 @@
+# pullback — one file, one `server` line per machine.
+#
+# This file is read by bash, so it can do anything bash can. Keep it owned by
+# root and 0600; the installer does that for you.
+
+# Where the snapshots live, on this machine.
+DEST=/srv/backups
+
+# How much history to keep. Snapshots are hard-linked, so an old one only
+# costs the blocks that nothing newer points at — be generous.
+KEEP_DAILY=14
+KEEP_WEEKLY=8
+KEEP_MONTHLY=12
+
+# `pullback status` calls a server stale after this long without a success.
+# Point your monitoring at that command and you will hear about a cron that
+# quietly stopped firing.
+MAX_AGE_HOURS=36
+
+# Anything smaller than this is not a database dump, it is an error message.
+MIN_DUMP_BYTES=512
+
+# Called as:  your-command <level> <message>
+# level is one of: error, recovered
+# NOTIFY_COMMAND=/usr/local/bin/pullback-notify
+
+# LOG_FILE=/var/log/pullback.log
+
+# If the dumps need another user over there, say so once, here:
+# PG_DUMP_COMMAND="sudo -n -u postgres pg_dump --no-owner --format=custom"
+# MYSQLDUMP_COMMAND="sudo -n mysqldump --single-transaction --quick"
+
+# ---------------------------------------------------------------- servers
+
+server web \
+  --host root@198.51.100.10 \
+  --path /var/www \
+  --path /etc/nginx \
+  --exclude '*.log' \
+  --exclude 'node_modules' \
+  --exclude 'cache/'
+
+server app \
+  --host deploy@198.51.100.11 \
+  --path /srv/app \
+  --postgres appdb \
+  --mysql legacy \
+  --exclude 'tmp/'
+
+# A machine reachable only through another one:
+# server behind \
+#   --host root@10.0.0.5 \
+#   --ssh '-J jump@198.51.100.10' \
+#   --path /data

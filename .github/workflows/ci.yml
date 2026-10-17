@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the tools it says it needs
+        run: |
+          bash --version | head -1
+          rsync --version | head -1
+
+      - name: every script parses
+        run: |
+          bash -n bin/pullback
+          for file in lib/*.sh test/*.sh; do bash -n "$file"; done
+          sh -n install.sh
+
+      - name: the suite, against a fake server
+        run: ./test/run.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Errors fail the build. Warnings are printed to be read, not to block a
+      # fix at two in the morning.
+      - name: real problems
+        run: shellcheck --severity=error --shell=bash bin/pullback lib/*.sh test/*.sh
+
+      - name: everything else, for information
+        run: shellcheck --severity=style --shell=bash bin/pullback lib/*.sh || true
+
+  install:
+    name: it installs and runs from the installed copy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo ./install.sh
+      - run: pullback --version
+      - name: a fresh install has no configured server yet
+        run: |
+          if pullback status; then
+            echo "an untouched example configuration should not report success" && exit 1
+          fi

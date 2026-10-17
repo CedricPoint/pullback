@@ -1,0 +1,18 @@
+[Unit]
+Description=Pull backups of every configured server
+Documentation=https://github.com/CedricPoint/pullback
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pullback run
+Nice=10
+IOSchedulingClass=idle
+
+# It needs to read everything it writes and nothing else.
+ProtectSystem=strict
+ReadWritePaths=/srv/backups /var/log
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes

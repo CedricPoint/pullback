@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+#
+# pullback — pull whole servers onto a machine they cannot reach back into.
+#
+# The direction is the whole point: this runs on the backup machine and
+# reaches out to the servers, so a server that gets broken into has no
+# credentials for, and no route to, the copies of itself.
+
+set -euo pipefail
+
+VERSION=0.1.0
+
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")" && pwd)
+
+# Run from a clone, or installed: look in the obvious places. A directory
+# only counts if it actually holds the file we came for — an empty lib/ next
+# to the binary should not shadow the real one.
+find_dir() {
+  local wanted="$1" marker="$2" override="$3" candidate
+
+  for candidate in       "$override"       "$here/../$wanted"       "$here/../lib/pullback/$wanted"       "/usr/local/lib/pullback/$wanted"       "/usr/lib/pullback/$wanted"; do
+    if [ -n "$candidate" ] && [ -f "$candidate/$marker" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  printf 'pullback: cannot find its %s directory (looked for %s)
+' "$wanted" "$marker" >&2
+  exit 2
+}
+
+LIB=$(find_dir lib config.sh "${PULLBACK_LIB:-}")
+SHARE=$(find_dir share pullback.conf.example "${PULLBACK_SHARE:-}")
+
+for part in log config backup retention check restore; do
+  # shellcheck source=/dev/null
+  . "$LIB/$part.sh"
+done
+
+CONFIG="${PULLBACK_CONFIG:-/etc/pullback/pullback.conf}"
+DRY_RUN=0
+VERBOSE=0
+VERIFY_ALL=0
+
+usage() {
+  cat <<'TEXT'
+
+  pullback — back up whole servers onto this machine, by pulling
+
+  Usage
+    pullback run [server…]          Take a snapshot of every server, or of some
+    pullback status [server…]       When each one last worked, and how big it is
+    pullback list [server…]         The snapshots on disk   (--contents for detail)
+    pullback verify [server…]       Re-check the checksums  (--all for every snapshot)
+    pullback restore <server> --into <dir> [--snapshot S] [--path P | --database D]
+    pullback prune [server…]        Apply the retention rules now
+    pullback doctor [server…]       Check everything before trusting it
+    pullback init                   Write a starting configuration
+
+  Options
+        --config <file>   default: /etc/pullback/pullback.conf
+        --dry-run         say what would be deleted, delete nothing
+        --verbose
+    -h, --help
+    -V, --version
+
+  Exit codes
+    0  everything worked
+    1  something failed, or a server is behind
+    2  the configuration or the invocation is wrong
+
+TEXT
+}
+
+main() {
+  local command=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help)    usage; exit 0 ;;
+      -V|--version) printf '%s\n' "$VERSION"; exit 0 ;;
+      --config)     CONFIG="${2:?--config needs a file}"; shift 2 ;;
+      --dry-run)    DRY_RUN=1; shift ;;
+      --verbose)    VERBOSE=1; shift ;;
+      --all)        VERIFY_ALL=1; shift ;;
+      --)           shift; break ;;
+      -*)           die "\"$1\" is not an option I know. Try --help." ;;
+      *)            command="$1"; shift; break ;;
+    esac
+  done
+
+  [ -n "$command" ] || { usage; exit 2; }
+
+  # init is the one command that runs without a configuration, since its job
+  # is to write one.
+  if [ "$command" = init ]; then
+    command_init "$@"
+    exit $?
+  fi
+
+  load_config "$CONFIG"
+
+  case "$command" in
+    run)     with_lock command_run "$@" ;;
+    prune)   with_lock command_prune "$@" ;;
+    status)  command_status "$@" ;;
+    list)    command_list "$@" ;;
+    verify)  command_verify "$@" ;;
+    restore) command_restore "$@" ;;
+    doctor)  command_doctor "$@" ;;
+    help)    usage ;;
+    *)       die "\"$command\" is not a command. Try --help." ;;
+  esac
+}
+
+# Two runs at once would fight over the same snapshot directory, and cron is
+# very good at starting a second one while the first is still going.
+with_lock() {
+  local lock="$DEST/.pullback.lock"
+  mkdir -p "$DEST" 2>/dev/null || true
+
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$lock" || die "cannot write $lock"
+    if ! flock -n 9; then
+      die "another pullback is already running (lock: $lock)"
+    fi
+  fi
+
+  "$@"
+}
+
+command_run() {
+  local names name started failed=0
+
+  check_server_names "$@"
+  mapfile -t names < <(select_servers "$@")
+  [ ${#names[@]} -gt 0 ] || die "no server selected"
+  started=$(date '+%s')
+
+  log "${C_BOLD}pullback${C_RESET} ${C_DIM}→ $DEST${C_RESET}"
+
+  for name in "${names[@]}"; do
+    if backup_server "$name"; then
+      prune_server "$name" || true
+    else
+      failed=$((failed + 1))
+    fi
+  done
+
+  local elapsed=$(( $(date '+%s') - started ))
+
+  if [ "$failed" -eq 0 ]; then
+    ok "${#names[@]} server(s) in $(human_age "$elapsed")"
+    recovered_if_needed
+    return 0
+  fi
+
+  fail "$failed of ${#names[@]} server(s) did not finish"
+  printf '%s\n' "$(date '+%s')" >"$DEST/.last-failure" 2>/dev/null || true
+  return 1
+}
+
+# Being told it is working again matters as much as being told it broke.
+recovered_if_needed() {
+  local marker="$DEST/.last-failure"
+  [ -f "$marker" ] || return 0
+  rm -f "$marker"
+  notify recovered "pullback is working again"
+}
+
+command_prune() {
+  local names name
+
+  check_server_names "$@"
+  mapfile -t names < <(select_servers "$@")
+  for name in "${names[@]}"; do
+    step "$name"
+    prune_server "$name"
+  done
+}
+
+command_init() {
+  local target="$CONFIG"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --config) target="${2:?--config needs a file}"; shift 2 ;;
+      *) die "init: \"$1\" is not an option I know" ;;
+    esac
+  done
+
+  if [ -f "$target" ]; then
+    die "$target already exists — I will not write over a working configuration"
+  fi
+
+  mkdir -p "$(dirname "$target")" || die "cannot create $(dirname "$target")"
+  cp "$SHARE/pullback.conf.example" "$target" || die "cannot write $target"
+  chmod 600 "$target" 2>/dev/null || true
+
+  ok "wrote $target"
+  printf '\n'
+  printf '  Next:\n'
+  printf '    1. edit it — one `server` line per machine\n'
+  printf '    2. pullback doctor      checks ssh, tools and paths\n'
+  printf '    3. pullback run         takes the first snapshot\n'
+  printf '    4. every night:\n'
+  printf '         systemd:  cp %s/pullback.* /etc/systemd/system/ && systemctl enable --now pullback.timer\n' "$SHARE"
+  printf '         cron:     %s\n' "$(cat "$SHARE/crontab.example" 2>/dev/null | tail -1)"
+  printf '\n'
+}
+
+main "$@"
+exit $?
