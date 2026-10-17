@@ -33,13 +33,78 @@ web                  7h 20m       28         94 GB     ok
 app                  7h 20m       28         31 GB     ok
 ```
 
+## It can look at a server for you
+
+```console
+$ pullback discover root@198.51.100.10
+
+looking at root@198.51.100.10
+  reading only: no file is written and nothing is installed over there
+  Ubuntu 24.04.4 LTS
+
+!   not proposing /var/lib/postgresql (555 MB)
+    live database files: copying these gives you a corrupt database, the dump above is the way
+
+!   not proposing /var/lib/docker (?)
+    docker's own storage: back up the compose files and the volumes you care about instead
+
+found on root@198.51.100.10
+  /var/www                               36 kB  web files
+  /etc/nginx                            228 kB  configuration
+  /etc/letsencrypt                       56 kB  configuration
+  /srv/app                               16 GB  application directory
+  postgres: appdb                               dumped, sudo -n -u postgres
+  mysql: legacy                                 dumped, direct
+
+  16 GB of files, plus 2 database(s)
+  2 of those sit inside another one, so they are not proposed separately
+  the first run copies all of it; after that only what changed
+
+# postgres needed sudo over there, so this is how to dump it:
+PG_DUMP_COMMAND="sudo -n -u postgres pg_dump --no-owner --format=custom"
+
+server srv628772 \
+  --host root@198.51.100.10 \
+  --path /var/www \
+  --path /etc/nginx \
+  --path /etc/letsencrypt \
+  --path /srv/app \
+  --postgres appdb \
+  --mysql legacy \
+  --exclude 'node_modules' \
+  --exclude 'vendor' \
+  --exclude '.cache' \
+  --exclude '*.log'
+
+  Append this to /etc/pullback/pullback.conf? [y/N]
+```
+
+It reads the web roots out of the nginx, Apache and Caddy configuration
+rather than guessing them, asks Postgres and MySQL what databases exist,
+measures what each directory would cost, and folds `/var/www/html` into
+`/var/www` instead of copying the same files twice. If a dump needed `sudo`
+over there, the line that makes it work ends up in the block.
+
+**It only reads.** The probe runs `test`, `ls`, `du`, `sed` over the
+configuration files, and two "list the databases" queries. It writes nothing,
+installs nothing, and a test in the suite fails if a command that could
+change something ever appears in it.
+
+**And it proposes.** The block is printed for you to read and edit; nothing is
+written until you answer yes, or pass `--yes`. Piped into something that is
+not a terminal, it prints and stops.
+
+What it deliberately refuses is as useful as what it offers: live database
+directories (copying those gives you a corrupt database — the dump is the way),
+Docker's own storage, caches, and logs, each with the reason.
+
 ## Three commands to be running
 
 ```bash
 git clone https://github.com/CedricPoint/pullback.git
 cd pullback && sudo ./install.sh
 
-sudo nano /etc/pullback/pullback.conf    # one `server` line per machine
+pullback discover root@your-server       # proposes a configuration, writes it if you agree
 pullback doctor                          # ssh, tools, paths — before you trust it
 pullback run                             # the first snapshot
 ```

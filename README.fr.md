@@ -36,13 +36,69 @@ app                  7h 20m       28         31 GB     ok
 *(L'outil s'exprime en anglais : sa sortie finit dans un journal, un courriel
 de cron ou une alerte, où le reste l'est déjà.)*
 
+## Il peut regarder un serveur pour vous
+
+```console
+$ pullback discover root@198.51.100.10
+
+looking at root@198.51.100.10
+  reading only: no file is written and nothing is installed over there
+  Ubuntu 24.04.4 LTS
+
+!   not proposing /var/lib/postgresql (555 MB)
+    live database files: copying these gives you a corrupt database, the dump above is the way
+
+found on root@198.51.100.10
+  /var/www                               36 kB  web files
+  /etc/nginx                            228 kB  configuration
+  /srv/app                               16 GB  application directory
+  postgres: appdb                               dumped, sudo -n -u postgres
+  mysql: legacy                                 dumped, direct
+
+  16 GB of files, plus 2 database(s)
+  2 of those sit inside another one, so they are not proposed separately
+
+server srv628772 \
+  --host root@198.51.100.10 \
+  --path /var/www \
+  --path /etc/nginx \
+  --path /srv/app \
+  --postgres appdb \
+  --mysql legacy \
+  --exclude 'node_modules' \
+  --exclude '*.log'
+
+  Append this to /etc/pullback/pullback.conf? [y/N]
+```
+
+Il lit les racines web dans la configuration de nginx, d'Apache et de Caddy
+plutôt que de les deviner, demande à PostgreSQL et à MySQL quelles bases
+existent, mesure ce que coûterait chaque dossier, et replie `/var/www/html`
+dans `/var/www` au lieu de copier deux fois les mêmes fichiers. Si un dump a
+eu besoin de `sudo` là-bas, la ligne qui le fait marcher se retrouve dans le
+bloc.
+
+**Il ne fait que lire.** La sonde exécute `test`, `ls`, `du`, `sed` sur les
+fichiers de configuration, et deux requêtes « liste les bases ». Elle n'écrit
+rien, n'installe rien, et un test de la suite échoue si une commande capable
+de modifier quelque chose venait à y apparaître.
+
+**Et il propose.** Le bloc est affiché pour que vous le lisiez et le
+modifiiez ; rien n'est écrit tant que vous n'avez pas répondu oui, ou passé
+`--yes`. Redirigé vers autre chose qu'un terminal, il affiche et s'arrête.
+
+Ce qu'il refuse délibérément est aussi utile que ce qu'il propose : les
+dossiers de bases de données vivantes (les copier donne une base corrompue —
+le dump est la bonne façon), le stockage interne de Docker, les caches et les
+journaux, chacun avec sa raison.
+
 ## Trois commandes et c'est en route
 
 ```bash
 git clone https://github.com/CedricPoint/pullback.git
 cd pullback && sudo ./install.sh
 
-sudo nano /etc/pullback/pullback.conf    # une ligne `server` par machine
+pullback discover root@votre-serveur     # propose une configuration, l'écrit si vous acceptez
 pullback doctor                          # ssh, outils, chemins — avant d'y croire
 pullback run                             # la première sauvegarde
 ```

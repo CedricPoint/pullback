@@ -29,6 +29,7 @@ checksums, real permissions.
 | `lib/retention.sh` | what to keep, and the guards around deleting |
 | `lib/check.sh` | status, verify, doctor |
 | `lib/restore.sh` | getting it back, and list |
+| `lib/discover.sh` | looking at a server and proposing a configuration |
 | `lib/log.sh` | output, and the notification hook |
 
 ## The rules this code lives by
@@ -46,6 +47,11 @@ that does will be turned down even if it is otherwise good:
 4. **An unexpected failure is loud.** Silence is reserved for success.
 5. **The direction is pull.** Nothing in here should ever need a credential
    that lives on the machine being backed up.
+6. **Discovery only reads, and only proposes.** The probe in
+   `lib/discover.sh` must never run a command that changes anything, and the
+   configuration it suggests is written only after a yes. A test fails if a
+   writing command appears in the probe, so adding one is not an oversight
+   you can make quietly.
 
 ## Shell style
 

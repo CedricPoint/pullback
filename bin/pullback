@@ -33,7 +33,7 @@ find_dir() {
 LIB=$(find_dir lib config.sh "${PULLBACK_LIB:-}")
 SHARE=$(find_dir share pullback.conf.example "${PULLBACK_SHARE:-}")
 
-for part in log config backup retention check restore; do
+for part in log config backup retention check restore discover; do
   # shellcheck source=/dev/null
   . "$LIB/$part.sh"
 done
@@ -56,6 +56,7 @@ usage() {
     pullback restore <server> --into <dir> [--snapshot S] [--path P | --database D]
     pullback prune [server…]        Apply the retention rules now
     pullback doctor [server…]       Check everything before trusting it
+    pullback discover user@host     Look at a machine and propose what to take
     pullback init                   Write a starting configuration
 
   Options
@@ -92,10 +93,14 @@ main() {
 
   [ -n "$command" ] || { usage; exit 2; }
 
-  # init is the one command that runs without a configuration, since its job
-  # is to write one.
+  # These two run without a configuration, since their job is to produce one.
   if [ "$command" = init ]; then
     command_init "$@"
+    exit $?
+  fi
+
+  if [ "$command" = discover ]; then
+    command_discover "$@"
     exit $?
   fi
 
